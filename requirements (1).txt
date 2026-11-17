@@ -1,0 +1,11 @@
+# Python 3.10 - 3.12 recommended (TensorFlow does not ship wheels for every newer version)
+streamlit>=1.36
+pandas>=2.0
+numpy>=1.26
+scikit-learn>=1.3
+xgboost>=2.0
+joblib>=1.3
+plotly>=5.20
+# Keras 3 (comes with TensorFlow) is required to load models/*.keras and models/*.h5
+tensorflow>=2.16
+h5py>=3.10
