@@ -31,12 +31,6 @@ def get_saved_models():
     return U.load_saved_models()
 
 
-@st.cache_resource(show_spinner="Training Random Forest (RUL capped at 125)…")
-def get_capped_rf():
-    train, _, _ = get_data()
-    return U.train_capped_rf(train, get_scaler())
-
-
 # --------------------------------------------------------------------------- setup
 st.title("✈️ Turbofan Engine RUL Prediction")
 st.caption("NASA C-MAPSS · FD001 · Remaining Useful Life estimation")
@@ -52,20 +46,10 @@ train, test, rul_last = get_data()
 scaler = get_scaler()
 saved_models, load_errors = get_saved_models()
 
+models: dict[str, U.Predictor] = dict(saved_models)
+
 with st.sidebar:
     st.header("Models")
-    use_rf = st.toggle(
-        "Add Random Forest (RUL capped at 125)",
-        value=True,
-        help="Trained on the fly from data/raw (a few seconds, then cached). "
-             "It fixes the un-capped-RUL issue of the notebook models and is a useful reference.",
-    )
-
-models: dict[str, U.Predictor] = dict(saved_models)
-if use_rf:
-    models["Random Forest (cap 125)"] = get_capped_rf()
-
-with st.sidebar:
     for name in models:
         st.write(f"✅ {name}")
     for name, err in load_errors.items():
@@ -73,13 +57,13 @@ with st.sidebar:
         st.caption(err[:200])
     st.divider()
     st.caption(
-        "Saved models were trained on **un-capped** RUL (0–361) and scored row-by-row on "
-        "mis-labelled test data in the notebooks. The *Model comparison* tab re-evaluates them "
-        "with the official protocol."
+        "Models are trained on RUL capped at 125 and evaluated with the official protocol "
+        "(one prediction per test engine, last cycle vs `RUL_FD001`). "
+        "⚠️ means a model file is missing or outdated: run its notebook in `notebooks/`."
     )
 
 if not models:
-    st.error("No model could be loaded. Check the `models/` folder and installed packages.")
+    st.error("No model could be loaded. Run the notebooks in `notebooks/` (03 first) and check the sidebar.")
     st.stop()
 
 train_mean_rul = float(train["RUL"].mean())
@@ -123,7 +107,8 @@ with tab_data:
 
     with st.expander("Features used by the models"):
         st.write(", ".join(U.FEATURES))
-        st.caption("Constant / near-constant sensors (1, 5, 6, 10, 16, 18, 19) were removed in notebook 03.")
+        st.caption("Constant sensors (1, 5, 6, 10, 16, 18, 19) and the 3 operating settings "
+                   "(FD001 has a single operating condition) are removed in notebook 03.")
 
 # --------------------------------------------------------------------- Engine RUL
 with tab_engine:
@@ -135,7 +120,7 @@ with tab_engine:
     chosen = st.multiselect("Models", list(models), default=list(models))
 
     if chosen:
-        Xs = U.scale(scaler, eng)
+        Xs = U.build_inputs(scaler, eng)
         preds = {m: U.predict(models[m], Xs) for m in chosen}
         row = eng.index[eng["cycle"] == cycle][0]
         true_now = float(eng.loc[row, "RUL"])
@@ -225,7 +210,7 @@ with tab_predict:
         st.markdown(
             "Upload a `.txt` / `.csv` in C-MAPSS format: either **26 columns without header** "
             "(`unit_id, cycle, 3 settings, 21 sensors`) or a **header row** containing at least the "
-            "17 feature names. Separators: space, tab, comma or semicolon."
+            "14 sensor names. Separators: space, tab, comma or semicolon."
         )
         file = st.file_uploader("Data file", type=["txt", "csv"])
         c1, c2 = st.columns(2)
@@ -245,7 +230,7 @@ with tab_predict:
             st.error(str(exc))
 
         if df_in is not None:
-            Xs = U.scale(scaler, df_in)
+            Xs = U.build_inputs(scaler, df_in)
             out = df_in[["unit_id", "cycle"]].copy()
             out["predicted_RUL"] = U.predict(models[model_name], Xs).round(1)
             last = U.last_cycle_rows(out)
@@ -269,7 +254,8 @@ with tab_predict:
                 cols[i % 3].number_input(f, value=mu, disabled=True, format="%.4f", key=f"m_{f}")
             else:
                 values[f] = cols[i % 3].slider(f, lo, hi, mu, step=(hi - lo) / 200, key=f"m_{f}")
-        row = pd.DataFrame([values])
-        p = float(U.predict(models[model_name], U.scale(scaler, row))[0])
+        row = pd.DataFrame([{"unit_id": 1, "cycle": 1, **values}])
+        p = float(U.predict(models[model_name], U.build_inputs(scaler, row))[0])
         st.metric(f"{model_name} — predicted RUL", f"{p:.0f} cycles")
-        st.caption("Single-snapshot prediction: the models do not use history, only the current reading.")
+        st.caption("Single-snapshot prediction: there is no history, so the GRU receives this reading repeated "
+                   "over its whole window (less reliable than a real sequence).")
